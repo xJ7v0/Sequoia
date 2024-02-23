@@ -1,0 +1,5 @@
+config.json
+robinhood.pickle
+__pycache__/
+venv/
+notes/

@@ -1,0 +1,130 @@
+{
+	"alpaca": {
+		"api_key": "",
+		"secret": "",
+		"account_id": "",
+		"comment": "https://alpaca.markets/"
+	},
+
+	"alphavantage": {
+		"api_key": ""
+	},
+
+	"robinhood": {
+		"user" : "",
+		"password" : "",
+		"device_token" : "",
+		"ira_account_number": "",
+		"account_number": "",
+		"comment": "https://robinhood.com/us/en/"
+	},
+
+	"moomoo": {
+		"api_key" : "",
+		"comment": "https://www.moomoo.com/us"
+	},
+
+	"nasdaq": {
+		"api_key": ""
+	},
+
+	"polygon": {
+		"api_key": "",
+		"comment": "https://polygon.io/"
+	},
+
+	"questrade": {
+		"refresh_token": "https://www.questrade.com/api/documentation/security"
+	},
+
+	"stocknewsapi": {
+		"api_key": ""
+	},
+
+	"webull": {
+		"user" : "",
+		"password" : "",
+		"did" : "",
+		"commment": "https://www.webull.com/"
+	},
+
+	"gmail": {
+		"sender": "",
+		"receiver": [""],
+		"api_key": "",
+		"app_password": ""
+	},
+
+	"whatsapp": {
+		"phone": ""
+	},
+
+	"settings": {
+		"finviz": {
+			"value": "https://finviz.com/screener.ashx?v=111&f=cap_smallunder,sh_outstanding_u20,sh_price_u10&ft=4&o=-marketcap&r=",
+			"comment": "Finviz https://finviz.com/screener.ashx url, it has to have '&r=' at the end of the url!!!!!!"
+		},
+
+		"max_price": {
+			"value": "12",
+			"comment": "Max price on the scanner for stocks."
+		},
+
+		"max_float": {
+			"value": "15000000",
+			"comment": "The max float (the amount of shares available to trade) for the scanner."
+		},
+
+		"user_agent": {
+			"value": "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
+			"comment": "User agent to use when using requests, usually to get around cloudflare and to spoof."
+		},
+
+		"multiplier": {
+			"value": "4",
+			"comment": "Multiplier for multiprocess to do more tasks, keep it as 1 to do as many task as there is cores."
+		},
+
+		"upper_percent": {
+			"value": "3.5",
+			"comment": "Percentage to look for on the 15 second candle for going long"
+		},
+
+		"lower_percent": {
+			"value": "-5",
+			"comment": "Percentage to look for on the 1 minute candle for going short"
+		},
+
+		"current_change_long": {
+			"value": "-25",
+			"comment": "Percentage change when retracing downwards from the previous candle or high of current candle, good for when to hold or to sell"
+		},
+
+		"current_change_short": {
+			"value": "8",
+			"comment": "Percentage change when retracing upwards from the previous candle or high of current candle, good for when to hold or to cover"
+		},
+
+		"news_good": {
+			"value": ["granted", "delisting", "approved", "approves", "approval", "phase", "stock split", "win", "wins", "FDA grants", "announces", "secures", "agreement", "achieved", "aquisition"],
+			"comment": "Keywords to search for on good news, use an array."
+
+		},
+
+		"news_bad": {
+			"value": ["lawsuit", "stock offering"],
+			"comment": "Keywords to search for to prevent it from buying, good for shorting though."
+		},
+
+		"wager_percent": {
+			"value": ".85",
+			"comment": "How much of your buying power you want to use in percent, must start with a decimal."
+		},
+
+		"wager_bp": {
+			"value": "8000",
+			"comment": "Max amount of buying power to use, if its less than wager_percent, it will use this instead."
+		}
+
+	}
+}

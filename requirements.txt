@@ -1,0 +1,17 @@
+apscheduler
+candlestick-chart
+certifi
+lxml
+#polygon-api-client
+pytz
+schedule
+requests
+websockets
+#alpaca-py
+#alpha_vantage
+#grequests
+#pypdf
+#pywhatkit
+#questrade_api
+#webull
+#webull-python-sdk-core
