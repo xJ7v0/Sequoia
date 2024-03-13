@@ -19,11 +19,6 @@
 		"comment": "https://robinhood.com/us/en/"
 	},
 
-	"moomoo": {
-		"api_key" : "",
-		"comment": "https://www.moomoo.com/us"
-	},
-
 	"nasdaq": {
 		"api_key": ""
 	},
@@ -31,10 +26,6 @@
 	"polygon": {
 		"api_key": "",
 		"comment": "https://polygon.io/"
-	},
-
-	"questrade": {
-		"refresh_token": "https://www.questrade.com/api/documentation/security"
 	},
 
 	"stocknewsapi": {
@@ -53,10 +44,6 @@
 		"receiver": [""],
 		"api_key": "",
 		"app_password": ""
-	},
-
-	"whatsapp": {
-		"phone": ""
 	},
 
 	"settings": {
