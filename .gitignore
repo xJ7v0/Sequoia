@@ -1,5 +1,7 @@
 config.json
 robinhood.pickle
+trades.pickle
 __pycache__/
 venv/
 notes/
+ibkr/

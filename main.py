@@ -30,6 +30,9 @@
 # check alpaca to make sure it buys in the premarket
 # fix robinhood to buy/sell in the premarket
 # fix trades[*][ticker]
+# make sure orders go through else cancel them and and do it again
+# watch multiple tickers
+# sell if green candle is 2% then red candle
 
 import asyncio, calendar, certifi, json, math, multiprocessing, os, pickle, pytz, re, requests, signal, schedule, smtplib, socket, ssl, sys, websockets
 #import robin_stocks.robinhood as r
@@ -105,7 +108,6 @@ class StockNewsAPI:
                      if k == ticker:
                         d = int(datetime.strptime(item["date"], "%a, %d %b %Y %H:%M:%S %z").timestamp() * 1000)
                         print(item["date"], "\033[92m", ticker, '\033[0m', title)
-                        #if int(t.time() * 1000) - 10000 <= d:
                         process = multiprocessing.Process(target=watch_start, args=(ticker,))
                         process.start()
 
@@ -118,7 +120,7 @@ class StockNewsAPI:
                   if k == ticker:
                      d = int(datetime.strptime(n["data"][i]["date"], "%a, %d %b %Y %H:%M:%S %z").timestamp() * 1000)
                      print(n["data"][i]["date"], "\033[92m", ticker, '\033[0m', n["data"][i]["title"])
-                     if int(t.time() * 1000) - 10000 <= d:
+                     if int(datetime.now(pytz.timezone("EST")).timestamp() * 1000) - 10000 <= d:
                         process = multiprocessing.Process(target=watch_start, args=(ticker,))
                         process.start()
 
@@ -253,21 +255,24 @@ class Robinhood:
 
    def get_pricebook_by_symbol(self, symbol):
      id = self.get_id(symbol)
-     return self.session.get("https://api.robinhood.com/marketdata/pricebook/snapshots/{0}/".format(id)).json()
+     a = self.session.get("https://api.robinhood.com/marketdata/pricebook/snapshots/{0}/".format(id)).json()
+     return a
 
-   def order_buy_market(self, symbol, quantity, account_number=None, timeInForce='gtc', extendedHours=False, jsonify=True):
-      return self.order(symbol, quantity, "buy", account_number, None, timeInForce, extendedHours, jsonify)
+   def order_buy_market(self, symbol, quantity, account_number=None, timeInForce='gtc', extendedHours=False):
+      return self.order(symbol, quantity, "buy", account_number, None, timeInForce, extendedHours)
 
-   def order_sell_market(self, symbol, quantity, account_number=None, timeInForce='gtc', extendedHours=False, jsonify=True):
-      return self.order(symbol, quantity, "sell", account_number, None, timeInForce, extendedHours, jsonify)
+   def order_sell_market(self, symbol, quantity, account_number=None, timeInForce='gtc', extendedHours=False):
+      return self.order(symbol, quantity, "sell", account_number, None, timeInForce, extendedHours)
 
-   def order_buy_limit(self, symbol, quantity, limitPrice, account_number=None, timeInForce='gtc', extendedHours=False, jsonify=True):
-      return self.order(symbol, quantity, "buy", account_number, limitPrice, timeInForce, extendedHours, jsonify)
+   def order_buy_limit(self, symbol, quantity, limitPrice, account_number=None, timeInForce='gtc', extendedHours=False):
+      return self.order(symbol, quantity, "buy", account_number, limitPrice, timeInForce, extendedHours)
 
-   def order_sell_limit(self, symbol, quantity, limitPrice, account_number=None, timeInForce='gtc', extendedHours=False, jsonify=True):
-      return self.order(symbol, quantity, "sell", account_number, limitPrice, timeInForce, extendedHours, jsonify)
-
-   def order(self, symbol, quantity, side, account_number=None, limitPrice=None, timeInForce='gtc', extendedHours=False, jsonify=True, market_hours='regular_hours'):
+   def order_sell_limit(self, symbol, quantity, limitPrice, account_number=None, timeInForce='gtc', extendedHours=False):
+      return self.order(symbol, quantity, "sell", account_number, limitPrice, timeInForce, extendedHours)
+# browser
+#{"account":"https://api.robinhood.com/accounts/406984328/","ask_price":"10.000000","bid_ask_timestamp":"2024-02-27T13:10:02Z","bid_price":"9.210000","instrument":"https://api.robinhood.com/instruments/72370071-a57a-4335-ad01-312ce75ad269/","quantity":"25","market_hours":"extended_hours","order_form_version":4,"ref_id":"b7baa87d-287b-4dbc-9c23-3c216649267d","side":"buy","symbol":"SWIN","time_in_force":"gfd","trigger":"immediate","type":"limit","preset_percent_limit":"0.05","price":"10.08"}
+#{'account': 'https://api.robinhood.com/accounts/406984328/',                                                                                         'instrument': 'https://api.robinhood.com/instruments/72370071-a57a-4335-ad01-312ce75ad269/', 'market_hours': 'extended_hours', 'order_form_version': 4, 'preset_percent_limit': '0.05', 'price': 10.08, 'quantity': 2, 'ref_id': '38206b7a-a20d-481d-afcc-fdd2c701f234', 'side': 'buy', 'symbol': 'SWIN', 'time_in_force': 'gfd', 'trigger': 'immediate', 'type': 'limit', 'extended_hours': True}
+   def order(self, symbol, quantity, side, account_number=None, limitPrice=None, timeInForce='gtc', extendedHours=False, market_hours='regular_hours'):
       orderType = "market"
       trigger = "immediate"
       if side == "buy":
@@ -322,9 +327,9 @@ class Robinhood:
             del payload['price']
 
       self.session.headers['Content-Type'] = 'application/json'
-      data = self.session.post("https://api.robinhood.com/orders/", data=payload, timeout=5).json()
+      data = self.session.post("https://api.robinhood.com/orders/", json=payload, timeout=5).json()
       self.session.headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=utf-8'
-
+      print(data)
       return(data)
 
 '''
@@ -345,6 +350,10 @@ trades = {"rh": {"daytrades": 0}, "rh_ira": {"daytrades": 0}, "alpaca": {"daytra
 trades["rh"]["daytrades"] = len(r.get_day_trades(account=config["robinhood"]["account_number"])["equity_day_trades"])
 trades["rh_ira"]["daytrades"] = len(r.get_day_trades(account=config["robinhood"]["ira_account_number"])["equity_day_trades"])
 trades["alpaca"]["daytrades"] = requests.get("https://api.alpaca.markets/v2/account", headers=headers).json()["daytrade_count"]
+
+with open("trades.pickle", 'wb') as file:
+   pickle.dump(trades, file)
+
 
 old_symbols_dicts = {}
 
@@ -417,6 +426,21 @@ def get_prev_mins_alpaca(m):
    current_time = datetime.now(pytz.timezone("EST"))
    time_ago = current_time - timedelta(minutes=m)
    return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
+
+def get_last_trade_day_alpaca():
+   current_time = datetime.now(pytz.timezone("EST"))
+   if calendar.day_name[current_time.weekday()] in ("Monday"):
+      time_ago = current_time - timedelta(days=3)
+      return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
+   elif calendar.day_name[current_time.weekday()] in ("Sunday"):
+      time_ago = current_time - timedelta(days=2)
+      return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
+   elif calendar.day_name[current_time.weekday()] in ("Saturday"):
+      time_ago = current_time - timedelta(days=1)
+      return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
+   else:
+      time_ago = current_time - timedelta(days=1)
+      return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
 
 def get_market_hours_type():
    now = datetime.now(pytz.timezone("EST")).time()
@@ -772,7 +796,8 @@ async def buy_alpaca(ticker, price, q=None):
             "side": "buy",
             "type": "market",
             "time_in_force": "day",
-            "qty": str(shares)
+            "qty": str(shares),
+            "symbol": ticker
          }
          # if not day trading
          if not special:
@@ -786,13 +811,17 @@ async def buy_alpaca(ticker, price, q=None):
             "time_in_force": "day",
             "qty": str(shares),
             "limit_price": str(price),
-            "extended_hours": True
+            "extended_hours": True,
+            "symbol": ticker
          }
          # if not day trading
          if not special:
             trades["alpaca"]["daytrades"] += 1
          print("BUYING LIMIT ORDER", ticker, shares, price)
          response = requests.post("https://api.alpaca.markets/v2/orders", json=payload, headers=headers)
+
+         print(response.text)
+
 
 async def buy_rh_roth_ira(ticker, price, q=None):
    global trades
@@ -901,16 +930,22 @@ async def buy_rh(ticker, price, q=None):
 
 async def go_long(ticker, price, q=None):
    global trades
+   with open("trades.pickle", 'rb') as file:
+      trades = pickle.load(file)
+
    if get_market_hours_type() == "pre":
-      if trades["rh_ira"]["daytrades"] < 3:
-         await buy_rh_roth_ira(ticker, round(price, 4), q)
-         await send_gmail("Buying On Robin Hood IRA. Ticker: " + ticker + " Price: " + str(price))
       if trades["rh"]["daytrades"] < 3:
          await buy_rh(ticker, round(price, 4), q)
          await send_gmail("Buying On Robin Hood. Ticker: " + ticker + " Price: " + str(price))
+      elif trades["rh_ira"]["daytrades"] < 3:
+         await buy_rh_roth_ira(ticker, round(price, 4), q)
+         await send_gmail("Buying On Robin Hood IRA. Ticker: " + ticker + " Price: " + str(price))
       elif trades["alpaca"]["daytrades"] < 3:
          await buy_alpaca(ticker, round(price, 4), q)
          await send_gmail("Buying Alpaca. Ticker: " + ticker + " Price: " + str(price))
+
+      with open("trades.pickle", 'wb') as file:
+         pickle.dump(trades, file)
 
 async def sell_rh(ticker, price, q=None):
    global trades
@@ -925,7 +960,7 @@ async def sell_rh(ticker, price, q=None):
       r.order_sell_market(symbol=ticker, quantity=shares, account_number=config["robinhood"]["account_number"])
       print("robinhood: Selling Market Order", ticker, shares, str(price))
    else:
-      ob = r.get_pricebook_by_symbol(ticker)
+      wob = r.get_pricebook_by_symbol(ticker)
       price = ob["bids"][1]["price"]["amount"]
       r.order_sell_limit(ticker, shares, float(price), account_number=config["robinhood"]["account_number"], extendedHours=True)
       print("robinhood: Selling Limit Order", ticker, str(shares), str(price))
@@ -974,7 +1009,8 @@ async def sell_alpaca(ticker, price, q=None):
          "side": "sell",
          "type": "market",
          "time_in_force": "day",
-         "qty": str(shares)
+         "qty": str(shares),
+         "symbol": ticker
       }
       response = requests.post("https://api.alpaca.markets/v2/orders", json=payload, headers=headers)
       print("alpaca: Selling Market Order", ticker, shares, str(price))
@@ -987,7 +1023,8 @@ async def sell_alpaca(ticker, price, q=None):
          "time_in_force": "day",
          "qty": str(shares),
          "limit_price": str(price),
-          "extended_hours": True
+          "extended_hours": True,
+          "symbol": ticker
       }
       response = requests.post("https://api.alpaca.markets/v2/orders", json=payload, headers=headers)
       print("alpaca: Selling Limit Order", ticker, str(shares), str(price))
@@ -996,6 +1033,9 @@ async def sell_alpaca(ticker, price, q=None):
 
 async def sell(ticker, price, q=None):
    global trades
+   with open("trades.pickle", 'rb') as file:
+      trades = pickle.load(file)
+
    if ticker in trades["rh_ira"]:
       await sell_rh_roth_ira(ticker, round(price, 4), q)
       await send_gmail("Selling On Robin Hood Roth IRA. Ticker: " + ticker + " Price: " + str(price))
@@ -1006,6 +1046,9 @@ async def sell(ticker, price, q=None):
       await sell_alpaca(ticker, round(price, 4), q)
       await send_gmail("Selling On Alpaca. Ticker: " + ticker + " Price: " + str(price))
 
+   with open("trades.pickle", 'wb') as file:
+      pickle.dump(trades, file)
+
 def go_short(ticker):
    print("stub")
 
@@ -1014,77 +1057,89 @@ def watch_start(ticker):
    asyncio.run(watch_alpaca(ticker))
 
 # fcl = first candle low
-async def trade(ticker, price, broker, fcl):
-   if price > trades[broker][ticker]["high"]:
-      trades[broker][ticker]["high"] = price
-      print(ticker, "High", trades[broker][ticker]["high"])
-   if price < trades[broker][ticker]["low"]:
-      trades[broker][ticker]["low"] = price
-      print(ticker, "Low", trades[broker][ticker]["low"])
+#async def trade(ticker, price, broker, fcl):
 
-   target_sell = fibonacci_retracement(trades[broker][ticker]["low"], trades[broker][ticker]["high"], 23.6)
-   if get_market_hours_type() == "pre":
-      # if the price of the stock goes below 7 percent of the low of the first movement candle
-      if price <= (fcl - (fcl *.07)):
-         await sell(ticker, price)
-         return True
 
-      #if price <= (c["bars"][-1]["l"] - (c["bars"][-1]["l"] *.07)):
-      #   await sell(ticker, price)
-      #   return True
-      # if a great move happened in 5 minutes sell, [RVSN 1/22/24 148%]
-      if get_percentage(trades[broker][ticker]["low"], trades[broker][ticker]["high"]) > 40:
-         if price <= target_sell:
-            await sell(ticker, price)
-            return True
-   elif get_market_hours_type() == "market" or get_market_hours_type() == "post":
-      if price <= target_sell:
-         print(ticker, "Target Sell", target_sell)
-         await sell(ticker, price)
-         return True
-
+#
+#   #if get_market_hours_type() == "pre":
+#      # if the price of the stock goes below 7 percent of the low of the first movement candle
+#
+#      #if price <= (c["bars"][-1]["l"] - (c["bars"][-1]["l"] *.07)):
+#      #   await sell(ticker, price)
+#      #   return True
+#      # if a great move happened in 5 minutes sell, [RVSN 1/22/24 148%]
+#      if get_percentage(trades[broker][ticker]["low"], trades[broker][ticker]["high"]) > 40:
+#         if price <= target_sell:
+#            await sell(ticker, price)
+#            return True
+#   elif get_market_hours_type() == "market" or get_market_hours_type() == "post":
+#      if price <= target_sell:
+#         print(ticker, "Target Sell", target_sell)
+#         await sell(ticker, price)
+#         return True
+#
    return False
 
 async def watch_alpaca(ticker):
+   global trades
    p = 0
-   if trades["rh_ira"]["daytrades"] < 3:
-      broker = "rh_ira"
-   elif trades["rh"]["daytrades"] < 3:
+   to = 0
+   # This is a race condition when called multiple times
+   if trades["rh"]["daytrades"] < 3:
       broker = "rh"
+   elif trades["rh_ira"]["daytrades"] < 3:
+      broker = "rh_ira"
    elif trades["alpaca"]["daytrades"] < 3:
       broker = "alpaca"
    else:
       return
 
-   if not ticker in trades[broker]:
-      trades[broker][ticker] = {}
-
+   #if not ticker in trades[broker]:
+   trades[broker][ticker] = {}
    trades[broker][ticker]["high"] = 0
    trades[broker][ticker]["low"] = sys.maxsize
+
    now = datetime.now(pytz.timezone("EST")).time()
    c = get_alpaca_data(ticker, get_prev_mins_alpaca(15), get_timestamp_alpaca(now.hour, now.minute), 15)
-   length = 0
-   if c:
-      i = 0
-      if c["bars"]:
-         while i < len(c["bars"]):
-            if c["bars"][i]["l"] < trades[broker][ticker]["low"]:
-               trades[broker][ticker]["low"] = c["bars"][i]["l"]
-            if c["bars"][i]["h"] > trades[broker][ticker]["high"]:
-               trades[broker][ticker]["high"] = c["bars"][i]["h"]
-            i += 1
-      else:
-         print(ticker, "No qualifying trades.")
-         return
+   if c.get("bars"):
+      if len(c["bars"]) == 1:
+         lc = get_alpaca_data(ticker, get_last_trade_day_alpaca(), get_timestamp_alpaca(now.hour, now.minute), 2000)
+         c["bars"] = lc["bars"] + c["bars"]
+   else:
+      c = get_alpaca_data(ticker, get_last_trade_day_alpaca(), get_timestamp_alpaca(now.hour, now.minute), 2000)
+
+   i = 0
+   for item in reversed(c["bars"]):
+      if i >= 15:
+         break
+      if item["l"] < trades[broker][ticker]["low"]:
+         trades[broker][ticker]["low"] = item["l"]
+         print("LOW:", ticker, trades[broker][ticker]["low"])
+      if item["h"] > trades[broker][ticker]["high"]:
+         trades[broker][ticker]["high"] = item["h"]
+      i += 1
+      fcl = trades[broker][ticker]["low"]
+
+#
+#   while i < len(c["bars"]):
+#      if i >= 15:
+#         break
+#      if c["bars"][i]["l"] < trades[broker][ticker]["low"]:
+#         trades[broker][ticker]["low"] = c["bars"][i]["l"]
+#      if c["bars"][i]["h"] > trades[broker][ticker]["high"]:
+#         trades[broker][ticker]["high"] = c["bars"][i]["h"]
+#      i += 1
 
    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
    ssl_context.load_verify_locations(certifi.where())
    sub = False
-   async for s in connect("wss://stream.data.alpaca.markets/v2/sip", close_timeout=1, ssl=ssl_context):
+   async for s in connect("wss://stream.data.alpaca.markets/v2/sip", close_timeout=5, ssl=ssl_context):
       try:
          cmsg = await s.recv()
+         #print(cmsg)
          await s.send(json.dumps({"action": "auth", "key": config["alpaca"]["api_key"], "secret": config["alpaca"]["secret"]}))
-         auth_msg = await s.recv()
+         amsg = await s.recv()
+         #print(amsg)
          while True:
             if not sub:
                if type(ticker) == list:
@@ -1093,6 +1148,7 @@ async def watch_alpaca(ticker):
                   await s.send(json.dumps({"action": "subscribe", "trades": ticker.split()}))
                try:
                   sub_msg = await asyncio.wait_for(s.recv(), timeout=3)
+                  print(sub_msg)
                   sub = True
                except asyncio.TimeoutError:
                   sub = False
@@ -1104,99 +1160,47 @@ async def watch_alpaca(ticker):
                print(ticker, "No stock movement detected after 7 seconds.")
                await s.close()
                return
-
-            for m in msg:
-               if not p:
-                  await go_long(ticker, m["p"])
-                  p = 1
-
-               if await trade(ticker, m["p"], broker, trades[broker][ticker]["low"]) == True:
+               to += 1
+               if to >= 60*4:
                   await s.close()
                   return
+               continue
 
-      except ConnectionClosedOK as e:
-         return
-      except ConnectionClosedError as e:
-         sub = True
-         continue
-
-async def watch_polygon(subs, ticker):
-   p = 0
-   if trades["rh_ira"]["daytrades"] < 3:
-      broker = "rh_ira"
-   elif trades["alpaca"]["daytrades"] < 3:
-      broker = "alpaca"
-
-   if not ticker in trades[broker]:
-      trades[broker][ticker] = {}
-
-   trades[broker][ticker]["high"] = 0
-   trades[broker][ticker]["low"] = sys.maxsize
-   now = datetime.now(pytz.timezone("EST")).time()
-   c = get_poly_data(ticker, get_prev_mins(15), get_timestamp(now.hour, now.minute), 60)
-   length = 0
-   if c:
-      i = 0
-      while i < c["resultsCount"]:
-         if c["results"][i]["l"] < trades[broker][ticker]["low"]:
-            trades[broker][ticker]["low"] = c["results"][i]["l"]
-         if c["results"][i]["h"] > trades[broker][ticker]["high"]:
-            trades[broker][ticker]["high"] = c["results"][i]["h"]
-         #candles += [Candle(open=c["results"][i]["o"], close=c["results"][i]["c"], high=c["results"][i]["h"], low=c["results"][i]["l"], volume=c["results"][i]["v"])]
-         i += 1
-
-#      try:
-#         for t, c in candles.items():
-#            # Serialize the candle data
-#            #serialized_data = [(candle.open, candle.close, candle.high, candle.low) for candle in candles]
-#            serialized_data = [[candle.open, candle.close, candle.high, candle.low, camdle.volume] for candle in c]
-#            await websocket.send(json.dumps((ticker, serialized_data)))
-#      except Exception as e:
-#         pass
-#asyncio.get_event_loop().run_until_complete(client())
-
-   ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-   ssl_context.load_verify_locations(certifi.where())
-   sub = True
-   async for s in connect("wss://socket.polygon.io/stocks", close_timeout=1, ssl=ssl_context):
-      try:
-         cmsg = await s.recv()
-         await s.send(json.dumps({"action": "auth", "params": config["polygon"]["api_key"]}))
-         auth_msg = await s.recv()
-         while True:
-            if sub:
-               await s.send(json.dumps({"action": "subscribe", "params": "T." + ticker}))
-               #await s.send(json.dumps({"action": "subscribe", "params": ",".join(subs)}))
-               #smsg = await asyncio.wait_for(s.recv(), timeout=3)
-               try:
-                  smsg = await asyncio.wait_for(s.recv(), timeout=3)
-                  sub = False
-               except asyncio.TimeoutError:
-                  sub = True
-                  continue
-            try:
-               msgr = await asyncio.wait_for(s.recv(), timeout=7)
-               msg = json.loads(msgr)
-            except asyncio.TimeoutError:
-               print(ticker, "No stock movement detected after 7 seconds.")
-               await s.close()
-               return
-            if msg[0]["ev"] == "status":
-               if msg[0]["status"] == "max_connections":
-                  print("Max Connections exceeded")
-                  await s.close()
-                  return
-
-            length += len(msg)
             for m in msg:
-               if not p:
-                  if length > 3:
+               if m["T"] == "error":
+                  if "auth timeout" in m["msg"]:
+                     await s.send(json.dumps({"action": "auth", "key": config["alpaca"]["api_key"], "secret": config["alpaca"]["secret"]}))
+                     auth_msg = await s.recv()
+                     sub = False
+                     continue
+                  else:
+                     print("MSG:", m)
+
+
+               if not p and m["T"] != "error":
+                  print(ticker)
+                  if m["p"] >= 1.08 * trades[broker][ticker].get("low"):
                      await go_long(ticker, m["p"])
                      p = 1
 
-               if trade(ticker, m["p"]) == True:
-                  await s.close()
-                  return
+               if p:
+                 if price > trades[broker][ticker]["high"]:
+                    trades[broker][ticker]["high"] = price
+                    print(ticker, "High", trades[broker][ticker]["high"])
+                 if price < trades[broker][ticker]["low"]:
+                    trades[broker][ticker]["low"] = price
+                    print(ticker, "Low", trades[broker][ticker]["low"])
+
+                 target_sell = fibonacci_retracement(trades[broker][ticker]["low"], trades[broker][ticker]["high"], 23.6)
+                 print("Target Sell:", ticker, target_sell)
+                 if m["p"] <= target_sell:
+                    await sell(ticker, m["p"])
+                    await s.close()
+                    return
+                 if m["p"] <= (fcl - (fcl *.07)):
+                    await sell(ticker, m["p"])
+                    await s.close()
+                    return
 
       except ConnectionClosedOK as e:
          return
