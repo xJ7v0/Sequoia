@@ -34,6 +34,14 @@
 # watch multiple tickers
 # sell if green candle is 2% then red candle
 
+
+
+# first price to make a new high
+# if price > previous red candle open; then buy
+# if price < previous green candle ;then sell
+
+# if doji then reversal
+#find_channel()
 import asyncio, calendar, certifi, json, math, multiprocessing, os, pickle, pytz, re, requests, signal, schedule, smtplib, socket, ssl, sys, websockets
 #import robin_stocks.robinhood as r
 import time as t
@@ -159,7 +167,7 @@ class Robinhood:
          returnPrice = round(price, 2)
       return returnPrice
 
-   def get_day_trades(self, info=None, account=None):
+   def get_day_trades(self, account=None):
       return self.session.get('https://api.robinhood.com/accounts/{0}/recent_day_trades/'.format(account)).json()
 
    def respond_to_challenge(self, challenge_id, sms_code):
@@ -213,7 +221,20 @@ class Robinhood:
 
       #json_data = json.dumps(payload)
       data = self.session.post("https://api.robinhood.com/oauth2/token/", data=payload, timeout=18).json()
+      print(data)
       if data:
+         if data.get("verification_workflow"):
+            data["verification_workflow"]
+            payload = {
+               "device_id": device_token,
+                "flow": "suv",
+                "input": { "workflow_id": data["verification_workflow"] }
+#{"verification_workflow":{"id":"9bceba19-478f-482d-b306-a13d727709ed","workflow_status":"workflow_status_internal_pending"}}
+#api.robinhood.com/pathfinder/user_machine
+#{"device_id":"3b5a3baf-ac73-4edc-a35b-6b506372f2d0","flow":"suv","input":{"workflow_id":"9bceba19-478f-482d-b306-a13d727709ed"}}
+#{"id":"6f45aa61-c0de-4246-9e7e-e7110da475fe"}
+#https://api.robinhood.com/pathfinder/inquiries/6f45aa61-c0de-4246-9e7e-e7110da475fe/user_view/
+#{"sequence":0,"user_input":{"status":"continue"}}
          if data.get("challenge"):
             challenge_id = data['challenge']['id']
             sms_code = input('Check your robinhood app for notification then press enter when accepted')
@@ -254,9 +275,12 @@ class Robinhood:
       return self.session.get(url).json()
 
    def get_pricebook_by_symbol(self, symbol):
-     id = self.get_id(symbol)
-     a = self.session.get("https://api.robinhood.com/marketdata/pricebook/snapshots/{0}/".format(id)).json()
-     return a
+      id = self.get_id(symbol)
+      a = self.session.get("https://api.robinhood.com/marketdata/pricebook/snapshots/{0}/".format(id)).json()
+      return a
+
+   def get_option_chains(self, symbol):
+      return self.session.get('https://api.robinhood.com/options/chains/{0}/'.format(id_for_chain(symbol)))
 
    def order_buy_market(self, symbol, quantity, account_number=None, timeInForce='gtc', extendedHours=False):
       return self.order(symbol, quantity, "buy", account_number, None, timeInForce, extendedHours)
@@ -581,16 +605,25 @@ def fibonacci_retracement(swing_high, swing_low, retracement_percentage):
 '''
 def alpaca_get(ticker, f, t, l, s, tf, session=None):
    #url = "https://data.alpaca.markets/v2/stocks/bars?symbols=" + ticker + "&start=" + f + "&end=" + t + "&limit=" + l + "&feed=sip&sort=" + s + "&timeframe=" + tf
-   if get_otc_status(ticker) == "otc":
-      url = "https://data.alpaca.markets/v2/stocks/" + ticker + "/bars?timeframe=" + tf + "&start=" + f + "&end=" + t + "&limit=" + str(l) + "&adjustment=all&feed=otc&sort=" + s
-   else:
-      url = "https://data.alpaca.markets/v2/stocks/" + ticker + "/bars?timeframe=" + tf + "&start=" + f + "&end=" + t + "&limit=" + str(l) + "&adjustment=all&feed=sip&sort=" + s
+   #if get_otc_status(ticker) == "otc":
+   #   url = "https://data.alpaca.markets/v2/stocks/" + ticker + "/bars?timeframe=" + tf + "&start=" + f + "&end=" + t + "&limit=" + str(l) + "&adjustment=all&feed=otc&sort=" + s
+   #else:
+   url = "https://data.alpaca.markets/v2/stocks/" + ticker + "/bars?timeframe=" + tf + "&start=" + f + "&end=" + t + "&limit=" + str(l) + "&adjustment=all&feed=sip&sort=" + s
 
-   headers = {
-      "APCA-API-KEY-ID": config["alpaca"]["api_key"],
-      "APCA-API-SECRET-KEY": config["alpaca"]["secret"],
-      "accept": "application/json"
-   }
+   if session:
+      headers = {
+         "APCA-API-KEY-ID": config["alpaca"]["api_key"],
+         "APCA-API-SECRET-KEY": config["alpaca"]["secret"],
+         "accept": "application/json",
+         "Connection": "keep-alive"
+      }
+
+   else:
+      headers = {
+         "APCA-API-KEY-ID": config["alpaca"]["api_key"],
+         "APCA-API-SECRET-KEY": config["alpaca"]["secret"],
+         "accept": "application/json"
+      }
 
    if session:
       session.headers.update(headers)
@@ -686,6 +719,14 @@ def get_trades_alpaca(ticker):
 # Strategies #
 ##############
 '''
+#sell call
+# topping tail that is red followed by a red candle
+#sell put/buy call
+# bottoming tail followed by a green candle
+#set break points and invisible stop point
+#previous low on previous candle if it goes below, reversal
+
+
 def scan_current_move_poly(ticker, result_queue, session):
    now = datetime.now(pytz.timezone("EST")).time()
    c = {}
@@ -698,6 +739,28 @@ def scan_current_move_poly(ticker, result_queue, session):
             symbols[ticker] = c["results"][i]
             result_queue.put(symbols)
          i += 1
+
+async def scan_swing():
+   symbols = await get_symbols()
+   session = requests.Session()
+   c = {}
+   good = []
+   now = datetime.now(pytz.timezone("EST"))
+   _from = now - timedelta(days=7)
+   t = get_timestamp_alpaca()
+   for ticker in symbols:
+      c = alpaca_get(ticker, _from.strftime('%Y-%m-%dT%H:%M:%S-05:00'), t, 30, "asc", "1Day", session)
+      i = 0
+      if c.get("bars") is not None:
+         #print(c["bars"])
+         while i < len(c["bars"]):
+            if get_percentage(c["bars"][i]["o"], c["bars"][i]["c"]) > 10:
+               print(ticker)
+               good += [ticker]
+            i += 1
+
+   with open('swing.pickle', 'wb') as f:
+      pickle.dump(good, f)
 
 def get_earnings():
    headers = {"User-Agent": config["settings"]["user_agent"]["value"]}
@@ -750,6 +813,21 @@ def parse_news(ticker):
 # Trading #
 ###########
 '''
+async def scalp_spy():
+   account = r.load_account_profile(account_number=config["robinhood"]["ira_account_number"])
+   bp = float(account["buying_power"])
+
+   chains = r.get_option_chains("SPY")
+   #price = ob["asks"][1]["price"]["amount"]
+
+
+
+   if q:
+      shares = q
+   else:
+      shares = math.floor(bp * float(config["settings"]["wager_percent"]["value"])/float(price))
+
+
 # This assumes you are using a margin account.
 async def buy_alpaca(ticker, price, q=None):
    global trades
@@ -937,12 +1015,12 @@ async def go_long(ticker, price, q=None):
       if trades["rh"]["daytrades"] < 3:
          await buy_rh(ticker, round(price, 4), q)
          await send_gmail("Buying On Robin Hood. Ticker: " + ticker + " Price: " + str(price))
-      elif trades["rh_ira"]["daytrades"] < 3:
-         await buy_rh_roth_ira(ticker, round(price, 4), q)
-         await send_gmail("Buying On Robin Hood IRA. Ticker: " + ticker + " Price: " + str(price))
-      elif trades["alpaca"]["daytrades"] < 3:
-         await buy_alpaca(ticker, round(price, 4), q)
-         await send_gmail("Buying Alpaca. Ticker: " + ticker + " Price: " + str(price))
+      #elif trades["rh_ira"]["daytrades"] < 3:
+      #   await buy_rh_roth_ira(ticker, round(price, 4), q)
+      #   await send_gmail("Buying On Robin Hood IRA. Ticker: " + ticker + " Price: " + str(price))
+      #elif trades["alpaca"]["daytrades"] < 3:
+      #   await buy_alpaca(ticker, round(price, 4), q)
+      #   await send_gmail("Buying Alpaca. Ticker: " + ticker + " Price: " + str(price))
 
       with open("trades.pickle", 'wb') as file:
          pickle.dump(trades, file)
@@ -1311,12 +1389,15 @@ def main():
 if __name__ == "__main__":
    args = sys.argv
    if len(args) > 1:
-      get_earnings()
+      #get_earnings()
       if "earnings" in args:
          schedule.every().day.at("05:00").do(get_earnings)
          while True:
             schedule.run_pending()
             t.sleep(60)
+
+      if "swing" in args:
+         asyncio.run(scan_swing())
 
       if "chart" in args:
          asyncio.get_event_loop().run_until_complete(client_chart())
