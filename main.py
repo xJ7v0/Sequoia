@@ -170,11 +170,6 @@ class Robinhood:
    def get_day_trades(self, account=None):
       return self.session.get('https://api.robinhood.com/accounts/{0}/recent_day_trades/'.format(account)).json()
 
-   def respond_to_challenge(self, challenge_id, sms_code):
-      url = 'https://api.robinhood.com/challenge/{0}/respond/'.format(challenge_id)
-      payload = { 'response': sms_code }
-      return(self.session.post(url, data=payload))
-
 # def get(self, url, payload=None):
 #    if payload:
 #        print(self.session.get(url).json())
@@ -186,14 +181,14 @@ class Robinhood:
       creds_file = "robinhood.pickle"
       payload = {
          'client_id': 'c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS',
-         'create_read_only_secondary_token': "true",
+         'create_read_only_secondary_token': "false",
          'device_token': device_token,
          'expires_in': 86400,
          'grant_type': 'password',
          'long_session': "true",
          'password': password,
          'scope': "internal",
-         'token_request_path': "/login",
+         'token_request_path': "/login/",
          'username': username,
       }
 
@@ -207,7 +202,6 @@ class Robinhood:
                refresh_token = pickle_data['refresh_token']
                self.session.headers["Authorization"] = '{0} {1}'.format(token_type, access_token)
                # Try to load account profile to check that authorization token is still valid.
-               #res = self.session.get("https://api.robinhood.com/positions/")
                res = self.session.get("https://api.robinhood.com/accounts/")
                # Raises exception is response code is not 200.
                res.raise_for_status()
@@ -220,30 +214,29 @@ class Robinhood:
             self.session.headers["Authorization"] = None
 
       #json_data = json.dumps(payload)
-      data = self.session.post("https://api.robinhood.com/oauth2/token/", data=payload, timeout=18).json()
-      print(data)
-      if data:
-         if data.get("verification_workflow"):
-            data["verification_workflow"]
-            payload = {
+      workflow = self.session.post("https://api.robinhood.com/oauth2/token/", data=payload, timeout=10).json()
+      print(workflow)
+      if workflow:
+         if workflow.get("verification_workflow"):
+            payload_temp = {
                "device_id": device_token,
                 "flow": "suv",
-                "input": { "workflow_id": data["verification_workflow"] }
-#{"verification_workflow":{"id":"9bceba19-478f-482d-b306-a13d727709ed","workflow_status":"workflow_status_internal_pending"}}
-#api.robinhood.com/pathfinder/user_machine
-#{"device_id":"3b5a3baf-ac73-4edc-a35b-6b506372f2d0","flow":"suv","input":{"workflow_id":"9bceba19-478f-482d-b306-a13d727709ed"}}
-#{"id":"6f45aa61-c0de-4246-9e7e-e7110da475fe"}
-#https://api.robinhood.com/pathfinder/inquiries/6f45aa61-c0de-4246-9e7e-e7110da475fe/user_view/
-#{"sequence":0,"user_input":{"status":"continue"}}
-         if data.get("challenge"):
-            challenge_id = data['challenge']['id']
-            sms_code = input('Check your robinhood app for notification then press enter when accepted')
-#            res = self.respond_to_challenge(challenge_id, sms_code)
-#            while 'challenge' in res and res['challenge']['remaining_attempts'] > 0:
-#               sms_code = input('That code was not correct. {0} tries remaining. Please type in another code: '.format(res['challenge']['remaining_attempts']))
-#               res = self.respond_to_challenge(challenge_id, sms_code)
-            self.session.headers["X-ROBINHOOD-CHALLENGE-RESPONSE-ID"] = challenge_id
+                "input": { "workflow_id": workflow["verification_workflow"]["id"] }
+            }
+
+            #o = self.session.options("https://api.robinhood.com/pathfinder/user_machine/", timeout=5)
+            #print(o)
+
+            self.session.headers["Content-Type"] = "application/json"
+            inquiry_id = self.session.post("https://api.robinhood.com/pathfinder/user_machine/", data=json.dumps(payload_temp), timeout=5).json()
+            data = self.session.get("https://api.robinhood.com/pathfinder/inquiries/" + inquiry_id["id"] + "/user_view/").json()
+
+            pause = input('Check your robinhood app for notification then press enter when accepted.')
+
+            payload_temp = {"sequence":0,"user_input":{"status":"continue"}}
+            data = self.session.post("https://api.robinhood.com/pathfinder/inquiries/" + inquiry_id["id"] + "/user_view/", data=json.dumps(payload_temp), timeout=5).json()
             data = self.session.post("https://api.robinhood.com/oauth2/token/", data=payload).json()
+
          # Update Session data with authorization or raise exception with the information present in data.
          if 'access_token' in data:
             token = '{0} {1}'.format(data['token_type'], data['access_token'])
@@ -253,7 +246,7 @@ class Robinhood:
                 pickle.dump({'token_type': data['token_type'],
                              'access_token': data['access_token'],
                              'refresh_token': data['refresh_token'],
-                             'device_token': payload['device_token']}, f)
+                             'device_token': payload_l['device_token']}, f)
          else:
             raise Exception(data['detail'])
       else:
