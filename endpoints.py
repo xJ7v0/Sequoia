@@ -1,39 +1,33 @@
 import json, requests, os, pytz, pickle
 
 #from os import path
-from Internal import alerts, tools
+import tools
 
-with open("config.json", "r") as jsonfile: config = json.load(jsonfile)
-
-'''
-##############
-# Brokerages #
-##############
-'''
 class Alpaca:
-   def __init__(self):
+   def __init__(self, key, secret, robinhood):
       self.session = requests.Session()
       self.session.headers = {
          "accept": "application/json",
-         "APCA-API-KEY-ID": config["alpaca"]["api_key"],
-         "APCA-API-SECRET-KEY": config["alpaca"]["secret"]
+         "APCA-API-KEY-ID": key,
+         "APCA-API-SECRET-KEY": secret,
          "Connection": "keep-alive"
       }
 
-      self.trades = {"brokerage": {"daytrades": 0}}
-      self.trades["brokerage"]["daytrades"] = requests.get("https://api.alpaca.markets/v2/account", headers=headers).json()["daytrade_count"]
+      self.robinhood = robinhood
 
+      self.trades = {"brokerage": {}}
+      #self.trades["brokerage"]["daytrades"] = requests.get("https://api.alpaca.markets/v2/account", headers=headers).json()["daytrade_count"]
 
-   def get_timestamp_alpaca(h=None, m=None, specific_date=None):
+   def get_timestamp(h=None, m=None, specific_date=None):
       current_time = datetime.now(pytz.timezone("EST"))
       return current_time.strftime('%Y-%m-%dT%H:%M:%S-05:00')
 
-   def get_prev_mins_alpaca(m):
+   def get_prev_mins(m):
       current_time = datetime.now(pytz.timezone("EST"))
       time_ago = current_time - timedelta(minutes=m)
       return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
 
-   def get_last_trade_day_alpaca():
+   def get_last_trade_day():
       current_time = datetime.now(pytz.timezone("EST"))
       if calendar.day_name[current_time.weekday()] in ("Monday"):
          time_ago = current_time - timedelta(days=3)
@@ -48,11 +42,16 @@ class Alpaca:
          time_ago = current_time - timedelta(days=1)
          return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
 
-   def get(ticker, f, t, l, s, tf):
+   def get_bars(ticker, f, t, l, s, tf ):
       #url = "https://data.alpaca.markets/v2/stocks/bars?symbols=" + ticker + "&start=" + f + "&end=" + t + "&limit=" + l + "&feed=sip&sort=" + s + "&timeframe=" + tf
       #if get_otc_status(ticker) == "otc":
       #   url = "https://data.alpaca.markets/v2/stocks/" + ticker + "/bars?timeframe=" + tf + "&start=" + f + "&end=" + t + "&limit=" + str(l) + "&adjustment=all&feed=otc&sort=" + s
       #else:
+
+      if f > t:
+         print("Fatal: From time higher than To time!", f, t)
+
+
       url = "https://data.alpaca.markets/v2/stocks/" + ticker + "/bars?timeframe=" + tf + "&start=" + f + "&end=" + t + "&limit=" + str(l) + "&adjustment=all&feed=sip&sort=" + s
 
       while True:
@@ -66,15 +65,12 @@ class Alpaca:
          except requests.exceptions.RequestException as e:
             pass
 
-   def get_alpaca_data(ticker, f, t, l, session=None, result_queue=None):
-      #if f > t:
-      #   print("Fatal: From time higher than To time!", f, t)
-      c = alpaca_get(ticker, f, t, l, "asc", "1Min", session)
+   def get_bars_multi_process(ticker, f, t, l, result_queue=None):
+      c = alpaca_get(ticker, f, t, l, "asc", "1Min")
       if result_queue and c:
          result_queue.put((ticker, c))
       else:
          return c
-
 
    # This assumes you are using a margin account.
    # Dont use
@@ -85,14 +81,12 @@ class Alpaca:
          special = False
          self.trades["brokerage"][ticker] = {}
 
-
       account = self.session.get("https://api.alpaca.markets/v2/account").json()
       bp = float(account["cash"])
       if bp > float(config["settings"]["wager_bp"]["value"]):
          bp = float(config["settings"]["wager_bp"]["value"])
 
-#######Bug here
-#######ob = r.get_pricebook_by_symbol(ticker)
+      ob = self.robinhood.get_pricebook_by_symbol(ticker)
       price = ob["asks"][1]["price"]["amount"]
 
       if q:
@@ -135,7 +129,7 @@ class Alpaca:
 
             if not special:
                self.trades["brokerage"]["daytrades"] += 1
-            print("BUYING LIMIT ORDER", ticker, shares, price)
+            print("alpaca: buying:", ticker, shares, price)
             response = requests.post("https://api.alpaca.markets/v2/orders", json=payload, headers=headers)
             #print(response.text)
 
@@ -160,7 +154,7 @@ class Alpaca:
          response = self.session.post("https://api.alpaca.markets/v2/orders", json=payload)
          print("alpaca: Selling Market Order", ticker, shares, str(price))
       else:
-#########ob = r.get_pricebook_by_symbol(ticker)
+         ob = self.robinhood.get_pricebook_by_symbol(ticker)
          price = ob["bids"][1]["price"]["amount"]
          payload = {
             "side": "sell",
@@ -174,19 +168,43 @@ class Alpaca:
          response = self.session.post("https://api.alpaca.markets/v2/orders", json=payload)
          print("alpaca: Selling Limit Order", ticker, str(shares), str(price))
 
-      del trades["alpaca"][ticker]
+#######del trades["alpaca"][ticker]
 
 
    def get_otc_status(self, ticker):
       data = self.session.get("https://api.alpaca.markets/v2/assets/" + ticker, headers=self.headers).json()
       return data["exchange"]
 
-   def get_trades_alpaca(ticker):
+   def get_trades(ticker):
       return self.session.get("https://data.alpaca.markets/v2/stocks/" + ticker + "/trades/latest?feed=sip").json()
+
+   # Single threaded
+   async def if_daily_above_10_percent(self):
+      symbols = tools.get_symbols()
+      c = {}
+      good = []
+      now = datetime.now(pytz.timezone("EST"))
+      _from = now - timedelta(days=7)
+      t = self.get_timestamp()
+      for ticker in symbols:
+         c = self.get(ticker, _from.strftime('%Y-%m-%dT%H:%M:%S-05:00'), t, 30, "asc", "1Day", session)
+         i = 0
+         if c.get("bars") is not None:
+            #print(c["bars"])
+            while i < len(c["bars"]):
+               if tools.get_percentage(c["bars"][i]["o"], c["bars"][i]["c"]) > 10:
+                  print(ticker)
+                  good += [ticker]
+               i += 1
+
+      with open('swing.pickle', 'wb') as f:
+         pickle.dump(good, f)
 
 
 class Robinhood:
    def __init__(self, user, password, device_token):
+      with open("config.json", "r") as jsonfile: self.config = json.load(jsonfile)
+
       self.session = requests.Session()
       self.session.headers = {
          "Accept": "*/*",
@@ -198,7 +216,7 @@ class Robinhood:
          "Host": "api.robinhood.com",
          "Origin": "https://robinhood.com",
          "Referer": "https://robinhood.com/",
-         "User-Agent": config["settings"]["user_agent"]["value"]
+         "User-Agent": self.config["settings"]["user_agent"]["value"]
       }
       self.login(user, password, device_token)
 
@@ -206,7 +224,7 @@ class Robinhood:
       #self.trades = {"brokerage": {"daytrades": 0}, "roth": {"daytrades": 0}, "traditional": {"daytrades": 0}}
 
       self.trades = {"brokerage": {}, "roth": {}, "traditional": {}}
-      if os.path.exists("robinhood_trades.pickle")
+      if os.path.exists("robinhood_trades.pickle"):
          with open("robinhood_trades.pickle", 'rb') as file:
             self.trades = pickle.load(file)
 
@@ -219,8 +237,6 @@ class Robinhood:
       else:
          returnPrice = round(price, 2)
       return returnPrice
-
-   def is_margin(self)
 
    def get_day_trades(self, account=None):
       return self.session.get('https://api.robinhood.com/accounts/{0}/recent_day_trades/'.format(account)).json()
@@ -264,7 +280,6 @@ class Robinhood:
 
       #json_data = json.dumps(payload)
       workflow = self.session.post("https://api.robinhood.com/oauth2/token/", data=payload, timeout=10).json()
-      #print(workflow)
       if workflow:
          if workflow.get("verification_workflow"):
             payload_temp = {
@@ -274,7 +289,6 @@ class Robinhood:
             }
 
             self.session.headers["Content-Type"] = "application/json"
-            #print(workflow)
             inquiry_id = self.session.post("https://api.robinhood.com/pathfinder/user_machine/", data=json.dumps(payload_temp), timeout=5).json()
             #print(inquiry_id)
             data = self.session.get("https://api.robinhood.com/pathfinder/inquiries/" + inquiry_id["id"] + "/user_view/").json()
@@ -439,9 +453,9 @@ class Robinhood:
       #del self.trades["brokerage"][ticker]
 
    async def buy(self, type, ticker, price, q=None):
-   '''
-    type: account type; brokerage, roth, traditional
-   '''
+      '''
+       type: account type; brokerage, roth, traditional
+      '''
       if ticker in self.trades[type]:
          special = True
       else:
@@ -603,8 +617,6 @@ class Symbols:
       return symbols
 
    #https://scanner.tradingview.com/america/scan
-   async def get_symbols(self):
-      return await stockanalysis()
 
 class Nasdaq:
    def get_earnings():
@@ -618,7 +630,6 @@ class Nasdaq:
 
 
 
-################################################################
 class Polygon:
    def __init__(self):
       self.session = requests.Session()
@@ -647,12 +658,10 @@ class Polygon:
       #timestamp_milliseconds = int(round((current_time + time_difference).timestamp() * 1000))
       return int(round(desired_time.timestamp()) * 1000)
 
-
-
-   def proc_if_8_percent_gain(self, ticker, result_queue):
-   '''
-   Get stocks that have moved 8 percent
-   '''
+   def if_8_percent_gain_multi(self, ticker, result_queue):
+      '''
+      Get stocks that have moved 8 percent
+      '''
 
       now = datetime.now(pytz.timezone("EST")).time()
       c = {}
@@ -667,14 +676,14 @@ class Polygon:
             i += 1
 
    def get_aggs(self, ticker, f, t, l, s, m, ts):
-   '''
+      '''
        f - from
        t - to
        l - limit
        s - sort
        m - multiplier
        ts - timespan
-   '''
+      '''
       if f > t:
          print("Fatal: From time higher than To time!", f, t)
          # EXIT()
@@ -695,9 +704,8 @@ class Polygon:
             #if isinstance(e, requests.exceptions.ConnectTimeout):
             #   print("Connection timeout. Check your network or try again later.")
 
-##########################################################################################################
 class StockNewsAPI:
-   def __init__(self):
+   def __init__(self, api_key):
       self.old_news_all = {}
       self.session = requests.Session()
       self.session.headers = {
@@ -705,60 +713,25 @@ class StockNewsAPI:
          "Connection": "keep-alive"
       }
 
-   async def get_all_stocknewsapi(self):
-      condition = True
-      while condition:
+   def get_all_tickers_press_releases(self):
+      while True:
          try:
-            response = self.session.get("https://stocknewsapi.com/api/v1/category?section=alltickers&cache=false&items=30&page=1&topic=PressRelease&token=" + config["stocknewsapi"]["api_key"], timeout=5)
+            response = self.session.get("https://stocknewsapi.com/api/v1/category?section=alltickers&cache=false&items=30&page=1&topic=PressRelease&token=" + api_key, timeout=5)
             if response.status_code == 200:
-               n = response.json()
-               condition = False
+               return response.json()
             response.raise_for_status()
          except requests.exceptions.Timeout:
             pass
-         #except requests.exceptions.RequestException as e:
-         #   pass
-         except:
-            print("Fatal: Couldn't get a valid response from stocknewsapi.com")
-            return
+         except requests.exceptions.RequestException as e:
+            pass
 
-      n["data"].reverse()
-      symbols = await Symbols.get_symbols()
+        # except:
+        #    print("Fatal: Couldn't get a valid response from stocknewsapi.com")
+        #    return
 
-      if self.old_news_all != n and self.old_news_all:
-         # Extract titles from old_data["data"] items
-         old_data_titles = set(item.get("title") for item in self.old_news_all.get("data", []))
-         for item in n.get("data", []):
-            title = item["title"]
-            if title not in old_data_titles:
-               for j in enumerate(item["tickers"]):
-                  index, ticker = j
-                  for k in symbols:
-                     if k == ticker:
-                        d = int(datetime.strptime(item["date"], "%a, %d %b %Y %H:%M:%S %z").timestamp() * 1000)
-                        print(item["date"], "\033[92m", ticker, '\033[0m', title)
-                        process = multiprocessing.Process(target=watch_start, args=(ticker,))
-                        process.start()
 
-      elif not self.old_news_all:
-         i = 0
-         while i < len(n["data"]):
-            for j in enumerate(n["data"][i]["tickers"]):
-               index, ticker = j
-               for k in symbols:
-                  if k == ticker:
-                     d = int(datetime.strptime(n["data"][i]["date"], "%a, %d %b %Y %H:%M:%S %z").timestamp() * 1000)
-                     print(n["data"][i]["date"], "\033[92m", ticker, '\033[0m', n["data"][i]["title"])
-                     if int(datetime.now(pytz.timezone("EST")).timestamp() * 1000) - 10000 <= d:
-                        process = multiprocessing.Process(target=watch_start, args=(ticker,))
-                        process.start()
-
-            i += 1
-      self.old_news_all = n
-      return
-
-   def get_press_release(ticker):
-      response = requests.get("https://stocknewsapi.com/api/v1?tickers=" + ticker + "&items=10&cache=false&page=1&&token=" + config["stocknewsapi"]["api_key"])
+   def get_press_release(self, ticker):
+      response = requests.get("https://stocknewsapi.com/api/v1?tickers=" + ticker + "&items=10&cache=false&page=1&&token=" + api_key)
       n = response.json()
       a = []
       i = 0
@@ -769,17 +742,3 @@ class StockNewsAPI:
          i += 1
       return a
 
-   def parse_news(ticker):
-      a = sorted(get_press_release(ticker), reverse=True)
-      #sorted_array = sorted(a, key=lambda x: x[0], reverse=True)
-      if a:
-         if get_prev_mins(3) <= a[0][0]:
-            print("Breaking News:", tools.milliseconds_to_time_date(a[0][0]), a[0][1])
-            asyncio.run(watch(ticker))
-
-      i = 0
-      while i < len(a):
-         for keyword in config["settings"]["news_good"]["value"]:
-            if any(word.lower() == keyword.lower() for word in a[i][1].split()):
-               print("Previous News:", "Keyword:", keyword, tools.milliseconds_to_time_date(a[i][0]), a[i][1])
-         i += 1
