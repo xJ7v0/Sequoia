@@ -1,4 +1,4 @@
-import json, requests, os, pytz
+import json, requests, os, pytz, pickle
 
 #from os import path
 from Internal import alerts, tools
@@ -13,19 +13,180 @@ with open("config.json", "r") as jsonfile: config = json.load(jsonfile)
 class Alpaca:
    def __init__(self):
       self.session = requests.Session()
-      self.headers = {
+      self.session.headers = {
          "accept": "application/json",
          "APCA-API-KEY-ID": config["alpaca"]["api_key"],
          "APCA-API-SECRET-KEY": config["alpaca"]["secret"]
+         "Connection": "keep-alive"
       }
+
+      self.trades = {"brokerage": {"daytrades": 0}}
+      self.trades["brokerage"]["daytrades"] = requests.get("https://api.alpaca.markets/v2/account", headers=headers).json()["daytrade_count"]
+
+
+   def get_timestamp_alpaca(h=None, m=None, specific_date=None):
+      current_time = datetime.now(pytz.timezone("EST"))
+      return current_time.strftime('%Y-%m-%dT%H:%M:%S-05:00')
+
+   def get_prev_mins_alpaca(m):
+      current_time = datetime.now(pytz.timezone("EST"))
+      time_ago = current_time - timedelta(minutes=m)
+      return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
+
+   def get_last_trade_day_alpaca():
+      current_time = datetime.now(pytz.timezone("EST"))
+      if calendar.day_name[current_time.weekday()] in ("Monday"):
+         time_ago = current_time - timedelta(days=3)
+         return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
+      elif calendar.day_name[current_time.weekday()] in ("Sunday"):
+         time_ago = current_time - timedelta(days=2)
+         return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
+      elif calendar.day_name[current_time.weekday()] in ("Saturday"):
+         time_ago = current_time - timedelta(days=1)
+         return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
+      else:
+         time_ago = current_time - timedelta(days=1)
+         return time_ago.strftime('%Y-%m-%dT%H:%M:%S-05:00')
+
+   def get(ticker, f, t, l, s, tf):
+      #url = "https://data.alpaca.markets/v2/stocks/bars?symbols=" + ticker + "&start=" + f + "&end=" + t + "&limit=" + l + "&feed=sip&sort=" + s + "&timeframe=" + tf
+      #if get_otc_status(ticker) == "otc":
+      #   url = "https://data.alpaca.markets/v2/stocks/" + ticker + "/bars?timeframe=" + tf + "&start=" + f + "&end=" + t + "&limit=" + str(l) + "&adjustment=all&feed=otc&sort=" + s
+      #else:
+      url = "https://data.alpaca.markets/v2/stocks/" + ticker + "/bars?timeframe=" + tf + "&start=" + f + "&end=" + t + "&limit=" + str(l) + "&adjustment=all&feed=sip&sort=" + s
+
+      while True:
+         try:
+            response = self.session.get(url, timeout=1)
+            if response.status_code == 200:
+               return response.json()
+            response.raise_for_status()
+         except requests.exceptions.Timeout:
+            pass
+         except requests.exceptions.RequestException as e:
+            pass
+
+   def get_alpaca_data(ticker, f, t, l, session=None, result_queue=None):
+      #if f > t:
+      #   print("Fatal: From time higher than To time!", f, t)
+      c = alpaca_get(ticker, f, t, l, "asc", "1Min", session)
+      if result_queue and c:
+         result_queue.put((ticker, c))
+      else:
+         return c
+
+
+   # This assumes you are using a margin account.
+   # Dont use
+   async def buy(ticker, price, q=None):
+      if ticker in self.trades["brokerage"]:
+         special = True
+      else:
+         special = False
+         self.trades["brokerage"][ticker] = {}
+
+
+      account = self.session.get("https://api.alpaca.markets/v2/account").json()
+      bp = float(account["cash"])
+      if bp > float(config["settings"]["wager_bp"]["value"]):
+         bp = float(config["settings"]["wager_bp"]["value"])
+
+#######Bug here
+#######ob = r.get_pricebook_by_symbol(ticker)
+      price = ob["asks"][1]["price"]["amount"]
+
+      if q:
+         shares = q
+      else:
+         shares = math.floor(bp * float(config["settings"]["wager_percent"]["value"])/float(price))
+
+      if self.trades["brokerage"][ticker].get("shares"):
+         self.trades["brokerage"][ticker]["shares"] += shares
+      else:
+         self.trades["brokerage"][ticker]["shares"] = shares
+
+      if account["daytrade_count"] < 3 and self.trades["brokerage"]["daytrades"] < 3:
+         self.session.headers["Content-Type"] = "application/json"
+
+         if get_market_hours_type() == "market":
+            payload = {
+               "side": "buy",
+               "type": "market",
+               "time_in_force": "day",
+               "qty": str(shares),
+               "symbol": ticker
+            }
+            # if not trading the same security
+            if not special:
+               self.trades["brokerage"]["daytrades"] += 1
+            print("BUYING MARKET ORDER", ticker, shares, price)
+            response = session.post("https://api.alpaca.markets/v2/orders", json=payload)
+
+         else:
+            payload = {
+               "side": "buy",
+               "type": "limit",
+               "time_in_force": "day",
+               "qty": str(shares),
+               "limit_price": str(price),
+               "extended_hours": True,
+               "symbol": ticker
+            }
+
+            if not special:
+               self.trades["brokerage"]["daytrades"] += 1
+            print("BUYING LIMIT ORDER", ticker, shares, price)
+            response = requests.post("https://api.alpaca.markets/v2/orders", json=payload, headers=headers)
+            #print(response.text)
+
+   async def sell(ticker, price, q=None):
+      self.session.headers["Content-Type"] = "application/json"
+
+      if q:
+         shares = q
+      elif self.trades["brokerage"][ticker].get("shares"):
+         shares = self.trades["brokerage"][ticker]["shares"]
+      else:
+         return
+
+      if tools.get_market_hours_type() == "market":
+         payload = {
+            "side": "sell",
+            "type": "market",
+            "time_in_force": "day",
+            "qty": str(shares),
+            "symbol": ticker
+         }
+         response = self.session.post("https://api.alpaca.markets/v2/orders", json=payload)
+         print("alpaca: Selling Market Order", ticker, shares, str(price))
+      else:
+#########ob = r.get_pricebook_by_symbol(ticker)
+         price = ob["bids"][1]["price"]["amount"]
+         payload = {
+            "side": "sell",
+            "type": "limit",
+            "time_in_force": "day",
+            "qty": str(shares),
+            "limit_price": str(price),
+             "extended_hours": True,
+             "symbol": ticker
+         }
+         response = self.session.post("https://api.alpaca.markets/v2/orders", json=payload)
+         print("alpaca: Selling Limit Order", ticker, str(shares), str(price))
+
+      del trades["alpaca"][ticker]
+
 
    def get_otc_status(self, ticker):
       data = self.session.get("https://api.alpaca.markets/v2/assets/" + ticker, headers=self.headers).json()
       return data["exchange"]
 
+   def get_trades_alpaca(ticker):
+      return self.session.get("https://data.alpaca.markets/v2/stocks/" + ticker + "/trades/latest?feed=sip").json()
+
 
 class Robinhood:
-   def __init__(self):
+   def __init__(self, user, password, device_token):
       self.session = requests.Session()
       self.session.headers = {
          "Accept": "*/*",
@@ -38,11 +199,16 @@ class Robinhood:
          "Origin": "https://robinhood.com",
          "Referer": "https://robinhood.com/",
          "User-Agent": config["settings"]["user_agent"]["value"]
-     }
+      }
+      self.login(user, password, device_token)
 
-      self.trades = {"brokerage": {"daytrades": 0}, "roth": {"daytrades": 0}}
-      self.trades["brokerage"]["daytrades"] = len(self.get_day_trades(account=config["robinhood"]["account_number"])["equity_day_trades"])
-      self.trades["roth"]["daytrades"] = len(self.get_day_trades(account=config["robinhood"]["ira_account_number"])["equity_day_trades"])
+      #not supporting this
+      #self.trades = {"brokerage": {"daytrades": 0}, "roth": {"daytrades": 0}, "traditional": {"daytrades": 0}}
+
+      self.trades = {"brokerage": {}, "roth": {}, "traditional": {}}
+      if os.path.exists("robinhood_trades.pickle")
+         with open("robinhood_trades.pickle", 'rb') as file:
+            self.trades = pickle.load(file)
 
    def round_price(self, price):
       price = float(price)
@@ -54,17 +220,12 @@ class Robinhood:
          returnPrice = round(price, 2)
       return returnPrice
 
+   def is_margin(self)
+
    def get_day_trades(self, account=None):
       return self.session.get('https://api.robinhood.com/accounts/{0}/recent_day_trades/'.format(account)).json()
 
-# def get(self, url, payload=None):
-#    if payload:
-#        print(self.session.get(url).json())
-#    else:
-#        print(self.session.get(url, params=payload).json())
-
-
-   def login(self, username=None, password=None, mfa_code=None, device_token=None):
+   def login(self, username=None, password=None, device_token=None):
       creds_file = "robinhood.pickle"
       payload = {
          'client_id': 'c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS',
@@ -90,6 +251,7 @@ class Robinhood:
                self.session.headers["Authorization"] = '{0} {1}'.format(token_type, access_token)
                # Try to load account profile to check that authorization token is still valid.
                res = self.session.get("https://api.robinhood.com/accounts/")
+               print(res)
                # Raises exception is response code is not 200.
                res.raise_for_status()
                return
@@ -102,7 +264,7 @@ class Robinhood:
 
       #json_data = json.dumps(payload)
       workflow = self.session.post("https://api.robinhood.com/oauth2/token/", data=payload, timeout=10).json()
-      print(workflow)
+      #print(workflow)
       if workflow:
          if workflow.get("verification_workflow"):
             payload_temp = {
@@ -111,29 +273,31 @@ class Robinhood:
                 "input": { "workflow_id": workflow["verification_workflow"]["id"] }
             }
 
-            #o = self.session.options("https://api.robinhood.com/pathfinder/user_machine/", timeout=5)
-            #print(o)
-
             self.session.headers["Content-Type"] = "application/json"
+            #print(workflow)
             inquiry_id = self.session.post("https://api.robinhood.com/pathfinder/user_machine/", data=json.dumps(payload_temp), timeout=5).json()
+            #print(inquiry_id)
             data = self.session.get("https://api.robinhood.com/pathfinder/inquiries/" + inquiry_id["id"] + "/user_view/").json()
 
             pause = input('Check your robinhood app for notification then press enter when accepted.')
 
             payload_temp = {"sequence":0,"user_input":{"status":"continue"}}
             data = self.session.post("https://api.robinhood.com/pathfinder/inquiries/" + inquiry_id["id"] + "/user_view/", data=json.dumps(payload_temp), timeout=5).json()
+            self.session.headers["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8"
+
             data = self.session.post("https://api.robinhood.com/oauth2/token/", data=payload).json()
+            #print(data)
 
          # Update Session data with authorization or raise exception with the information present in data.
          if 'access_token' in data:
             token = '{0} {1}'.format(data['token_type'], data['access_token'])
             self.session.headers["Authorization"] = token
-            data['detail'] = "logged in with brand new authentication code."
+            #data['detail'] = "logged in with brand new authentication code."
             with open(creds_file, 'wb') as f:
                 pickle.dump({'token_type': data['token_type'],
                              'access_token': data['access_token'],
                              'refresh_token': data['refresh_token'],
-                             'device_token': payload_l['device_token']}, f)
+                             'device_token': payload['device_token']}, f)
          else:
             raise Exception(data['detail'])
       else:
@@ -237,162 +401,117 @@ class Robinhood:
       return(data)
 
 
-   async def sell(self, ticker, price, q=None):
-      #with open("trades.pickle", 'rb') as file:
-      #   self.trades = pickle.load(file)
+   async def sell_all(self, ticker, price, q=None):
+      if ticker in self.trades["traditional"]:
+         await sell_traditional(ticker, round(price, 4), q)
+         await alerts.send_gmail("Selling On Robinhood Trad. IRA. Ticker: " + ticker + " Price: " + str(price))
 
       if ticker in self.trades["roth"]:
          await sell_roth(ticker, round(price, 4), q)
          await alerts.send_gmail("Selling On Robin Hood Roth IRA. Ticker: " + ticker + " Price: " + str(price))
+
       if ticker in self.trades["brokerage"]:
          await sell_brokerage(ticker, round(price, 4), q)
-         #await send_gmail("Selling On Robin Hood. Ticker: " + ticker + " Price: " + str(price))
-      #elif ticker in trades["alpaca"]:
-      #   await sell_alpaca(ticker, round(price, 4), q)
-         #await send_gmail("Selling On Alpaca. Ticker: " + ticker + " Price: " + str(price))
+         await alerts.send_gmail("Selling On Robin Hood. Ticker: " + ticker + " Price: " + str(price))
 
-#      with open("trades.pickle", 'wb') as file:
-#         pickle.dump(trades, file)
+      with open("robinhood_trades.pickle", 'wb') as file:
+         pickle.dump(trades, file)
 
-   async def sell_brokerage(self, ticker, price, q=None):
+   # to delete make sure all shares are sold
+   async def sell(self, type, ticker, price, q=None):
       if q:
          shares = int(q)
-      elif self.trades["brokerage"][ticker].get("shares"):
-         shares = int(self.trades["brokerage"][ticker]["shares"])
+      elif self.trades[type][ticker].get("shares"):
+         shares = int(self.trades[type][ticker]["shares"])
       else:
+         print("robinhood: sell() no shares to sell")
          return
 
-      if get_market_hours_type() == "market":
-         self.order_sell_market(symbol=ticker, quantity=shares, account_number=config["robinhood"]["account_number"])
-         print("brokerage: Selling Market Order", ticker, shares, str(price))
+      if tools.get_market_hours_type() == "market":
+         self.order_sell_market(symbol=ticker, quantity=shares, account_number=config["robinhood"][type + "_account_number"])
+         print(type + ": Selling Market Order", ticker, shares, str(price))
       else:
          ob = self.get_pricebook_by_symbol(ticker)
          price = ob["bids"][1]["price"]["amount"]
-         self.order_sell_limit(ticker, shares, float(price), account_number=config["robinhood"]["account_number"], extendedHours=True)
-         print("brokerage: Selling Limit Order", ticker, str(shares), str(price))
+         self.order_sell_limit(ticker, shares, float(price), account_number=config["robinhood"][type + "_account_number"], extendedHours=True)
+         print(type + ": Selling Limit Order", ticker, str(shares), str(price))
 
-      del self.trades["brokerage"][ticker]
+      #del self.trades["brokerage"][ticker]
 
-   async def sell_roth(self, ticker, price, q=None):
+   async def buy(self, type, ticker, price, q=None):
+   '''
+    type: account type; brokerage, roth, traditional
+   '''
+      if ticker in self.trades[type]:
+         special = True
+      else:
+         special = False
+         self.trades[type][ticker] = {}
+
+      account = self.load_account_profile(account_number=config["robinhood"][type + "_account_number"])
+      bp = float(account["buying_power"])
+      if bp > float(config["settings"]["wager_bp"]["value"]):
+         bp = float(config["settings"]["wager_bp"]["value"])
+
+      ob = self.get_pricebook_by_symbol(ticker)
+      price = ob["asks"][1]["price"]["amount"]
+
       if q:
-         shares = int(q)
-      elif self.trades["roth"][ticker].get("shares"):
-         shares = int(self.trades["roth"][ticker]["shares"])
+         shares = q
       else:
-         return
+         shares = math.floor(bp * float(config["settings"]["wager_percent"]["value"])/float(price))
 
-      if get_market_hours_type() == "market":
-         self.order_sell_market(symbol=ticker, quantity=shares, account_number=config["robinhood"]["ira_account_number"])
-         print("roth: Selling Market Order", ticker, shares, str(price))
+      if self.trades[type][ticker].get("shares"):
+         self.trades[type][ticker]["shares"] += shares
       else:
-         ob = self.get_pricebook_by_symbol(ticker)
-         price = ob["bids"][1]["price"]["amount"]
-         self.order_sell_limit(ticker, shares, float(price), account_number=config["robinhood"]["ira_account_number"], extendedHours=True)
-         print("roth: Selling Limit Order", ticker, str(shares), str(price))
+         self.trades[type][ticker]["shares"] = shares
 
-      del self.trades["roth"][ticker]
+# Not supporting margin accounts under 25k
+#      if account["type"] == "margin":
+#          if float(account["portfolio_cash"]) < 25000:
+#             daytrades = self.get_day_trades(account=config["robinhood"][type + "_account_number"])
+#             if len(daytrades["equity_day_trades"]) < 3 and trades[type]["daytrades"] < 3 and not daytrades["option_day_trades"]:
+#                if tools.get_market_hours_type() == "market":
+#                   if not special:
+#                      self.trades["rh_ira"]["daytrades"] += 1
+#                   data = self.order_buy_market(symbol=ticker, quantity=shares, account_number=config["robinhood"]["ira_account_number"])
+#                   print("BUYING MARKET ORDER", ticker, shares, price)
+#                else:
+#                   if not special:
+#                      self.trades["rh_ira"]["daytrades"] += 1
+#                   print("BUYING LIMIT ORDER", ticker, shares, price)
+#                   data = self.order_buy_limit(symbol=ticker, quantity=shares, limitPrice=float(price), account_number=config["robinhood"]["ira_account_number"], extendedHours=True)
+
+      if account["type"] == "cash" or (account["type"] == "margin" and float(account["portfolio_cash"]) >= 25000):
+         if tools.get_market_hours_type() == "market":
+            self.order_buy_market(ticker, shares, account_number=config["robinhood"][type + "_account_number"])
+            print("BUYING MARKET ORDER", ticker, str(shares), str(price))
+         else:
+            ob = self.get_pricebook_by_symbol(ticker)
+            price = ob["asks"][1]["price"]["amount"]
+            self.order_buy_limit(ticker, shares, float(price), account_number=config["robinhood"][type + "_account_number"], extendedHours=True)
+            print("robinhood: " + type + ": BUYING LIMIT ORDER", ticker, str(shares), str(price))
+      else:
+         if float(account["portfolio_cash"]) < 25000:
+            print("Not Supporting margin accounts under 25k")
 
    async def buy_roth(self, ticker, price, q=None):
-      if ticker in self.trades["roth"]:
-         special = True
-      else:
-         special = False
+      self.buy("roth", price, q)
 
-      self.trades["roth"][ticker] = {}
+   async def buy_traditional(self, ticker, price, q=None):
+      self.buy("traditional", price, q)
 
-      account = self.load_account_profile(account_number=config["robinhood"]["ira_account_number"])
-      bp = float(account["buying_power"])
-      if bp > float(config["settings"]["wager_bp"]["value"]):
-         bp = float(config["settings"]["wager_bp"]["value"])
+   async def buy_brokerage(self, price, q=None):
+      self.buy("brokerage", price, q)
 
-      ob = self.get_pricebook_by_symbol(ticker)
-      price = ob["asks"][1]["price"]["amount"]
+   async def sell_roth(self, ticker, price, q=None):
+      self.sell("roth", price, q)
 
-      if q:
-         shares = q
-      else:
-         shares = math.floor(bp * float(config["settings"]["wager_percent"]["value"])/float(price))
+   async def sell_traditional(self, ticker, price, q=None):
+      self.sell("traditional", price, q)
 
-      if self.trades["roth"][ticker].get("shares"):
-         self.trades["roth"][ticker]["shares"] += shares
-      else:
-         self.trades["roth"][ticker]["shares"] = shares
-
-      if account["type"] == "margin":
-          if float(account["portfolio_cash"]) < 25000:
-             daytrades = self.get_day_trades(account=config["robinhood"]["ira_account_number"])
-             if len(daytrades["equity_day_trades"]) < 3 and trades["rh_ira"]["daytrades"] < 3 and not daytrades["option_day_trades"]:
-                if tools.get_market_hours_type() == "market":
-                   if not special:
-                      self.trades["rh_ira"]["daytrades"] += 1
-                   data = self.order_buy_market(symbol=ticker, quantity=shares, account_number=config["robinhood"]["ira_account_number"])
-                   print("BUYING MARKET ORDER", ticker, shares, price)
-                else:
-                   if not special:
-                      self.trades["rh_ira"]["daytrades"] += 1
-                   print("BUYING LIMIT ORDER", ticker, shares, price)
-                   data = self.order_buy_limit(symbol=ticker, quantity=shares, limitPrice=float(price), account_number=config["robinhood"]["ira_account_number"], extendedHours=True)
-
-      elif account["type"] == "cash":
-         if tools.get_market_hours_type() == "market":
-            self.order_buy_market(ticker, shares, account_number=config["robinhood"]["ira_account_number"])
-            print("BUYING MARKET ORDER", ticker, str(shares), str(price))
-         else:
-            ob = self.get_pricebook_by_symbol(ticker)
-            price = ob["asks"][1]["price"]["amount"]
-            self.order_buy_limit(ticker, shares, float(price), account_number=config["robinhood"]["ira_account_number"], extendedHours=True)
-            print("BUYING LIMIT ORDER", ticker, str(shares), str(price))
-
-   async def buy_brokerage(ticker, price, q=None):
-      if ticker in self.trades["brokerage"]:
-         special = True
-      else:
-         special = False
-
-      trades["brokerage"][ticker] = {}
-
-      account = self.load_account_profile(account_number=config["robinhood"]["account_number"])
-      bp = float(account["buying_power"])
-      if bp > float(config["settings"]["wager_bp"]["value"]):
-         bp = float(config["settings"]["wager_bp"]["value"])
-
-      ob = self.get_pricebook_by_symbol(ticker)
-      price = ob["asks"][1]["price"]["amount"]
-
-      if q:
-         shares = q
-      else:
-         shares = math.floor(bp * float(config["settings"]["wager_percent"]["value"])/float(price))
-
-      if self.trades["brokerage"][ticker].get("shares"):
-         self.trades["brokerage"][ticker]["shares"] += shares
-      else:
-         self.trades["brokerage"][ticker]["shares"] = shares
-
-      if account["type"] == "margin":
-          if float(account["portfolio_cash"]) < 25000:
-             daytrades = self.get_day_trades(account=config["robinhood"]["account_number"])
-             if len(daytrades["equity_day_trades"]) < 3 and trades["rh"]["daytrades"] < 3 and not daytrades["option_day_trades"]:
-                if tools.get_market_hours_type() == "market":
-                   if not special:
-                      self.trades["brokerage"]["daytrades"] += 1
-                   data = self.order_buy_market(symbol=ticker, quantity=shares, account_number=config["robinhood"]["account_number"])
-                   print("BUYING MARKET ORDER", ticker, shares, price)
-                else:
-                   if not special:
-                      self.trades["brokerage"]["daytrades"] += 1
-                   print("BUYING LIMIT ORDER", ticker, shares, price)
-                   data = self.order_buy_limit(symbol=ticker, quantity=shares, limitPrice=float(price), account_number=config["robinhood"]["account_number"], extendedHours=True)
-
-      elif account["type"] == "cash":
-         if get_market_hours_type() == "market":
-            self.order_buy_market(ticker, shares, account_number=config["robinhood"]["account_number"])
-            print("BUYING MARKET ORDER", ticker, str(shares), str(price))
-         else:
-            ob = self.get_pricebook_by_symbol(ticker)
-            price = ob["asks"][1]["price"]["amount"]
-            self.order_buy_limit(ticker, shares, float(price), account_number=config["robinhood"]["account_number"], extendedHours=True)
-            print("BUYING LIMIT ORDER", ticker, str(shares), str(price))
+   async def sell_brokerage(self, price, q=None):
+      self.sell("brokerage", price, q)
 
 
 class Symbols:
@@ -497,11 +616,47 @@ class Nasdaq:
       for i in e["data"]["rows"]:
          print(d, "\033[92m", i["symbol"], '\033[0m', i["lastYearEPS"], i["epsForecast"])
 
+
+
+################################################################
 class Polygon:
-   def scan_current_move_poly(ticker, result_queue, session):
+   def __init__(self):
+      self.session = requests.Session()
+
+   def get_prev_mins(self, m=5):
+      new_time = datetime.now() - timedelta(minutes=m)
+      rounded_time = datetime(
+         new_time.year, new_time.month, new_time.day,
+         new_time.hour, new_time.minute - new_time.minute % 1, 0, 0
+      )
+      return math.floor(rounded_time.timestamp() * 1000)
+
+   def get_timestamp(self, h=None, m=None, specific_date=None):
+      today = date.today()
+      if calendar.day_name[today.weekday()] in ("Saturday", "Sunday") and specific_date is None:
+         specific_date =  datetime.strptime(self.get_last_friday(), '%Y-%m-%d')
+         specific_date = specific_date.replace(tzinfo=pytz.timezone("EST"))
+      current_time = datetime.now(pytz.timezone("EST"))
+      if specific_date:
+         desired_time = specific_date.replace(hour=h, minute=m, second=0, microsecond=0)
+      elif h is not None and m is not None:
+         desired_time = current_time.replace(hour=h, minute=m, second=0, microsecond=0)
+      else:
+         desired_time = current_time
+      #time_difference = desired_time - current_time
+      #timestamp_milliseconds = int(round((current_time + time_difference).timestamp() * 1000))
+      return int(round(desired_time.timestamp()) * 1000)
+
+
+
+   def proc_if_8_percent_gain(self, ticker, result_queue):
+   '''
+   Get stocks that have moved 8 percent
+   '''
+
       now = datetime.now(pytz.timezone("EST")).time()
       c = {}
-      c = get_poly_data(ticker, get_prev_mins(2), get_timestamp(now.hour, now.minute), 8, session)
+      c = self.get_aggs(ticker, self.get_prev_mins(2), get_timestamp(now.hour, now.minute), 8, "asc", 15, "second")
       i = 0
       symbols = {}
       if c:
@@ -510,50 +665,37 @@ class Polygon:
                symbols[ticker] = c["results"][i]
                result_queue.put(symbols)
             i += 1
-   def poly_get(ticker, f, t, l, s, m, ts, session=None):
-      # f - from
-      # t - to
-      # l - limit
-      # s - sort
-      # m - multiplier
-      # ts - timespan
-      url = "https://api.polygon.io/v2/aggs/ticker/" + ticker + "/range/" + str(m) + "/" + ts + "/" + str(f) + "/" + str(t) + "?adjusted=true&sort=" + s + "&limit=" + str(l) + "&apiKey=" + config["polygon"]["api_key"]
-      if session:
-         while True:
-            try:
-               response = session.get(url, timeout=2)
-               if response.status_code == 200:
-                  return response.json()
-               response.raise_for_status()
-            except requests.exceptions.Timeout:
-               pass
-               #print("The request timed out. Check your network or try again later.")
-            except requests.exceptions.RequestException as e:
-               pass
-               #print(f"An error occurred: {e}")
-               #if isinstance(e, requests.exceptions.ConnectTimeout):
-               #   print("Connection timeout. Check your network or try again later.")
-      else:
-         while True:
-            try:
-               response = requests.get(url, timeout=2)
-               if response.status_code == 200:
-                  return response.json()
-               response.raise_for_status()
-            except requests.exceptions.Timeout:
-               pass
-            except requests.exceptions.RequestException as e:
-               pass
 
-   def get_poly_data(ticker, f, t, l, session=None, result_queue=None):
+   def get_aggs(self, ticker, f, t, l, s, m, ts):
+   '''
+       f - from
+       t - to
+       l - limit
+       s - sort
+       m - multiplier
+       ts - timespan
+   '''
       if f > t:
          print("Fatal: From time higher than To time!", f, t)
-      c = poly_get(ticker, f, t, l, "asc", 15, "second", session)
-      if result_queue and c:
-         result_queue.put((ticker, c))
-      else:
-         return c
+         # EXIT()
 
+      url = "https://api.polygon.io/v2/aggs/ticker/" + ticker + "/range/" + str(m) + "/" + ts + "/" + str(f) + "/" + str(t) + "?adjusted=true&sort=" + s + "&limit=" + str(l) + "&apiKey=" + config["polygon"]["api_key"]
+      while True:
+         try:
+            response = self.session.get(url, timeout=2)
+            if response.status_code == 200:
+               return response.json()
+            response.raise_for_status()
+         except requests.exceptions.Timeout:
+            pass
+            #print("The request timed out. Check your network or try again later.")
+         except requests.exceptions.RequestException as e:
+            pass
+            #print(f"An error occurred: {e}")
+            #if isinstance(e, requests.exceptions.ConnectTimeout):
+            #   print("Connection timeout. Check your network or try again later.")
+
+##########################################################################################################
 class StockNewsAPI:
    def __init__(self):
       self.old_news_all = {}
@@ -614,3 +756,30 @@ class StockNewsAPI:
             i += 1
       self.old_news_all = n
       return
+
+   def get_press_release(ticker):
+      response = requests.get("https://stocknewsapi.com/api/v1?tickers=" + ticker + "&items=10&cache=false&page=1&&token=" + config["stocknewsapi"]["api_key"])
+      n = response.json()
+      a = []
+      i = 0
+      while i < len(n["data"]):
+         d = int(datetime.strptime(n["data"][i]["date"], "%a, %d %b %Y %H:%M:%S %z").timestamp() * 1000)
+         if "PressRelease" in n["data"][i]["topics"]:
+            a.append((d, n["data"][i]["title"]))
+         i += 1
+      return a
+
+   def parse_news(ticker):
+      a = sorted(get_press_release(ticker), reverse=True)
+      #sorted_array = sorted(a, key=lambda x: x[0], reverse=True)
+      if a:
+         if get_prev_mins(3) <= a[0][0]:
+            print("Breaking News:", tools.milliseconds_to_time_date(a[0][0]), a[0][1])
+            asyncio.run(watch(ticker))
+
+      i = 0
+      while i < len(a):
+         for keyword in config["settings"]["news_good"]["value"]:
+            if any(word.lower() == keyword.lower() for word in a[i][1].split()):
+               print("Previous News:", "Keyword:", keyword, tools.milliseconds_to_time_date(a[i][0]), a[i][1])
+         i += 1
