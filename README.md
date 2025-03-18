@@ -1,12 +1,21 @@
-# Install
+# Bootstrap
 cd tradebot-python
 python -m venv venv
 . ./venv/bin/activate
 pip install -r requirements.txt
 
-
 # Config
-cp default_config.json config.json
+Edit config file
 
-then edit config file
+# Usage
+from sequoia import Sequoia
+sequoia = Sequoia("path/to/config.json")
 
+# Start growing
+sequoia.start()
+
+# Or run a strategy
+sequoia.strats.
+
+# Use tools
+sequoia.tools..

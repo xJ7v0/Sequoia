@@ -1,7 +1,15 @@
-config.json
-robinhood.pickle
-trades.pickle
+# Python
 __pycache__/
 venv/
+
+# text editors
+*.save
+
+# pickle files
+robinhood.pickle
+trades.pickle
+
+
+config.json
 notes/
 ibkr/
